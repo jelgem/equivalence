@@ -1,9 +1,9 @@
-from scipy.interpolate import interp1d
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import cantera as ct
 from scipy.stats import beta
+from scipy import interpolate, integrate
+
 
 plt.rcParams['xtick.labelsize'] = 11
 plt.rcParams['ytick.labelsize'] = 11
@@ -12,7 +12,7 @@ plt.rcParams['axes.labelsize'] = 14
 # = = = = = = = = = = = = = = = = = = = = = = = = = #
 
 class stoichiometry:
-    def __init__(self, Fuel_dict, Ox_dict, ylength = 5001):
+    def __init__(self, Fuel_dict, Ox_dict, ylength = 10001):
         # STEP 0: Obtain the stoichiometic properties
         stoich = ct.Solution('gri30.yaml')
         stoich.set_equivalence_ratio(1.0, Fuel_dict, Ox_dict)
@@ -55,13 +55,69 @@ class stoichiometry:
             print(f'Median = {self.medianY:1.5f} Mass Fraction, {self.medianPhi:1.5f} ER')
             print(f'Mean   = {self.meanY:1.5f} Mass Fraction, {self.meanPhi:1.5f} ER')
         
+    
+    #================================================================#
+    # Cumulative Distribution Function
+    #================================================================#
+    
+    def CDFunc(self, x, f, low = 0, high = 1e8):
+        # Ensure inputs are numpy arrays and sorted
+        x = np.asarray(x)
+        f = np.asarray(f)
+    
+        # Interpolate the PDF (linear or cubic for smoothness)
+        pdf_interp = interpolate.interp1d(x, f, kind='cubic', fill_value=0.0, bounds_error=False, assume_sorted=True)
+    
+        # Numerical integration for the CDF between [low, high]
+        cdf_val, _ = integrate.quad(pdf_interp, low, high)
+        return(cdf_val)
+    
+    #================================================================#
+    # Mean Numerator Integral
+    #================================================================#
+
+    def MeanIntegral(self, x, f, low, high):
+        """
+        Numerically computes the integral of x * f(x) dx from `low` to `high`, given sample points x and PDF values f.
+        """            
+        # Interpolate x*f(x)
+        mean_integrand = interpolate.interp1d(x, x * f, kind='cubic', fill_value=0.0, bounds_error=False, assume_sorted=True)
         
+        # Integrate from low to high
+        mean_integral, _ = integrate.quad(mean_integrand, low, high)
+        return(mean_integral)
+    
+    #================================================================#
+    # System of equations to solve
+    #================================================================#
+
+    def SE_phi(self, lowhigh, pcdf=0.9):
+        """
+        The system of equations to find the roots to identify symmetric points.
+        
+        lowhigh : List containing the low and high values of the (test) range
+        pcdf : the portion of values to expect to find in the range 
+        """
+        low, high = lowhigh # Split up the list
+        # Compute the CDF and the Mean-Integral-Numerator for this range. Return the difference versus the target.
+        vex = [self.CDFunc(self.Phi, self.Bphi, low, high) - pcdf, 
+                self.MeanIntegral(self.Phi, self.Bphi, low, high) - pcdf]
+        # Add a penalty if either value is negative
+        for i in range(len(vex)):
+            vex[i] *= (1 + 100*(min(lowhigh)**2 * (min(lowhigh)<=0)))
+        
+        return(vex)
+    
+
         
     # / / / / / / / / / / / / / / / / / / / / / / / / #
     # Functions between non-dimensional metrics
     # \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ #
     def Phifunc(self, y):
         return((y / (1 - y + 1e-17)) / (self.Yfuel / ( 1 - self.Yfuel)))
+    
+    def Yphifunc(self,phi):
+        return(phi / (self.s + phi))
         
     
     
